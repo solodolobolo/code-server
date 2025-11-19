@@ -47,6 +47,14 @@ Find us at:
 
 [![code-server](https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/code-server-banner.png)](https://coder.com)
 
+## Custom Implementation Details
+
+This custom build of `code-server` includes the following additional features:
+
+*   **Docker CLI:** The Docker command-line interface is installed, allowing you to manage Docker containers and images directly from within your `code-server` environment.
+*   **Node.js & npm:** Node.js and its package manager `npm` are installed, enabling JavaScript development and access to a vast ecosystem of tools and libraries.
+*   **Passwordless Sudo:** The `sudo` utility is installed and configured to allow the default user (`abc`) to execute commands with superuser privileges without needing to enter a password.
+
 ## Supported Architectures
 
 We utilise the docker manifest for multi-platform awareness. More information is available from docker [here](https://distribution.github.io/distribution/spec/manifest-v2-2/#manifest-list) and our announcement [here](https://blog.linuxserver.io/2019/02/21/the-lsio-pipeline-project/).
@@ -329,32 +337,33 @@ Once registered you can define the dockerfile to use with `-f Dockerfile.aarch64
 
 ## Versions
 
-* **10.08.25:** - Let server listen on both ipv4 and ipv6.
-* **03.06.25:** - Allow setting PWA name using env var `PWA_APPNAME`.
-* **13.10.24:** - Only chown config folder when change to ownership or new install is detected.
-* **09.10.24:** - Manage permissions in /config/.ssh according to file type
-* **19.08.24:** - Rebase to Ubuntu Noble.
-* **01.07.23:** - Deprecate armhf. As announced [here](https://www.linuxserver.io/blog/a-farewell-to-arm-hf)
-* **05.10.22:** - Install recommended deps to maintain parity with the older images.
-* **29.09.22:** - Rebase to jammy, switch to s6v3. Fix chown logic to skip `/config/workspace` contents.
-* **20.02.22:** - Install using the official tarballs.
-* **29.12.21:** - Add `install-extension` as a helper for mods to install extensions.
-* **06.12.21:** - Add `DEFAULT_WORKSPACE` env var.
-* **29.11.21:** - Rebase to Ubuntu focal.
-* **16.09.21:** - Fix slow `chown` on large workspace (contents of workspace folder no longer chowned).
-* **11.07.21:** - Bump node to 14 to fix builds
-* **08.05.21:** - Fix doc link
-* **04.02.20:** - Allow setting gui password via hash using env var `HASHED_PASSWORD`.
-* **23.12.20:** - Allow setting sudo password via hash using env var `SUDO_PASSWORD_HASH`.
-* **29.05.20:** - Add --domain-proxy support.
-* **21.05.20:** - Shrink images, install via yarn, fix arm32v7 build.
-* **18.05.20:** - Switch to multi-arch images, install via npm.
-* **29.04.20:** - Update start arguments.
-* **01.04.20:** - Structural changes required for v3.
-* **17.01.20:** - Fix artifact url retrieval from github.
-* **24.10.19:** - Upgrade to v2 builds.
-* **28.09.19:** - Update project logo.
-* **21.09.19:** - Add development builds/tag.
-* **09.07.19:** - Add optional sudo access.
-* **01.07.19:** - Add nano.
-* **24.06.19:** - Initial Release.
+*   **Custom Implementation:** Added Docker CLI, Node.js, npm, and `sudo` for single password entry per session.
+*   **10.08.25:** - Let server listen on both ipv4 and ipv6.
+*   **03.06.25:** - Allow setting PWA name using env var `PWA_APPNAME`.
+*   **13.10.24:** - Only chown config folder when change to ownership or new install is detected.
+*   **09.10.24:** - Manage permissions in /config/.ssh according to file type
+*   **19.08.24:** - Rebase to Ubuntu Noble.
+*   **01.07.23:** - Deprecate armhf. As announced [here](https://www.linuxserver.io/blog/a-farewell-to-arm-hf)
+*   **05.10.22:** - Install recommended deps to maintain parity with the older images.
+*   **29.09.22:** - Rebase to jammy, switch to s6v3. Fix chown logic to skip `/config/workspace` contents.
+*   **20.02.22:** - Install using the official tarballs.
+*   **29.12.21:** - Add `install-extension` as a helper for mods to install extensions.
+*   **06.12.21:** - Add `DEFAULT_WORKSPACE` env var.
+*   **29.11.21:** - Rebase to Ubuntu focal.
+*   **16.09.21:** - Fix slow `chown` on large workspace (contents of workspace folder no longer chowned).
+*   **11.07.21:** - Bump node to 14 to fix builds
+*   **08.05.21:** - Fix doc link
+*   **04.02.20:** - Allow setting gui password via hash using env var `HASHED_PASSWORD`.
+*   **23.12.20:** - Allow setting sudo password via hash using env var `SUDO_PASSWORD_HASH`.
+*   **29.05.20:** - Add --domain-proxy support.
+*   **21.05.20:** - Shrink images, install via yarn, fix arm32v7 build.
+*   **18.05.20:** - Switch to multi-arch images, install via npm.
+*   **29.04.20:** - Update start arguments.
+*   **01.04.20:** - Structural changes required for v3.
+*   **17.01.20:** - Fix artifact url retrieval from github.
+*   **24.10.19:** - Upgrade to v2 builds.
+*   **28.09.19:** - Update project logo.
+*   **21.09.19:** - Add development builds/tag.
+*   **09.07.19:** - Add optional sudo access.
+*   **01.07.19:** - Add nano.
+*   **24.06.19:** - Initial Release.

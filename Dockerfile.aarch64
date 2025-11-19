@@ -14,6 +14,26 @@ ARG DEBIAN_FRONTEND="noninteractive"
 ENV HOME="/config"
 
 RUN \
+  echo "**** install docker cli ****" && \
+  apt-get update && \
+  apt-get install -y \
+    ca-certificates \
+    curl && \
+  install -m 0755 -d /etc/apt/keyrings && \
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && \
+  chmod a+r /etc/apt/keyrings/docker.asc && \
+  echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+    tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+  apt-get update && \
+  apt-get install -y \
+    docker-ce-cli && \
+  echo "**** install nodejs ****" && \
+  curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
+  apt-get install -y \
+    nodejs && \
+  npm install -g npm@11.6.2 && \
   echo "**** install runtime dependencies ****" && \
   apt-get update && \
   apt-get install -y \
@@ -22,6 +42,9 @@ RUN \
     nano \
     net-tools \
     sudo && \
+  echo "**** configure passwordless sudo ****" && \
+  echo "abc ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/99-passwordless-sudo && \
+  chmod 0440 /etc/sudoers.d/99-passwordless-sudo && \
   echo "**** install code-server ****" && \
   if [ -z ${CODE_RELEASE+x} ]; then \
     CODE_RELEASE=$(curl -sX GET https://api.github.com/repos/coder/code-server/releases/latest \
