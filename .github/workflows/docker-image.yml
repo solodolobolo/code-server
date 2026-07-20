@@ -1,0 +1,76 @@
+name: Build and Push
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # Check every 6 hours
+  push:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      upstream_digest: ${{ steps.check.outputs.upstream_digest }}
+    steps:
+      - name: Check for updates
+        id: check
+        run: |
+          # Use skopeo to query the remote registry metadata instantly
+          UPSTREAM_DIGEST=$(skopeo inspect docker://lscr.io/linuxserver/code-server:latest | jq -r '.Digest')
+          
+          # Query our own image to see what base digest it was last built with.
+          # 2>/dev/null handles the case where your image doesn't exist yet on the very first run.
+          CURRENT_BASE_DIGEST=$(skopeo inspect docker://solodolobolo/code-server:latest 2>/dev/null | jq -r '.Labels["org.opencontainers.image.base.digest"]' || echo "none")
+          
+          echo "Upstream Digest: $UPSTREAM_DIGEST"
+          echo "Current Base Digest: $CURRENT_BASE_DIGEST"
+          
+          # Export the upstream digest so the build job can label the new image
+          echo "upstream_digest=$UPSTREAM_DIGEST" >> $GITHUB_OUTPUT
+          
+          # Force a build if it's a manual trigger, a push to master, OR if the digests don't match
+          if [ "$UPSTREAM_DIGEST" != "$CURRENT_BASE_DIGEST" ] || [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Update found or manual/push trigger detected. Building."
+          else
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "No updates to base image. Skipping build."
+          fi
+
+  build:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: solodolobolo/code-server:latest
+          pull: true
+          # Inject the base image digest we found in the previous step
+          labels: |
+            org.opencontainers.image.base.name=lscr.io/linuxserver/code-server:latest
+            org.opencontainers.image.base.digest=${{ needs.check-upstream.outputs.upstream_digest }}
+          # Use GitHub Actions cache to speed up the build when only the base image updates
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
