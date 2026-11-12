@@ -1,54 +1,128 @@
-name: Build and Push
+name: Build and Push Code-Server
 
 on:
   schedule:
-    - cron: '0 */6 * * *' # Check every 6 hours
+    - cron: '0 */6 * * *'
   push:
-    branches: [ "master" ]
+    branches: ["master"]
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: code-server-build-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   check-upstream:
     runs-on: ubuntu-latest
+
     outputs:
       should_build: ${{ steps.check.outputs.should_build }}
-      upstream_digest: ${{ steps.check.outputs.upstream_digest }}
-    steps:
-      - name: Check for updates
-        id: check
-        run: |
-          # Use skopeo to query the remote registry metadata instantly
-          UPSTREAM_DIGEST=$(skopeo inspect docker://lscr.io/linuxserver/code-server:latest | jq -r '.Digest')
-          
-          # Query our own image to see what base digest it was last built with.
-          # 2>/dev/null handles the case where your image doesn't exist yet on the very first run.
-          CURRENT_BASE_DIGEST=$(skopeo inspect docker://solodolobolo/code-server:latest 2>/dev/null | jq -r '.Labels["org.opencontainers.image.base.digest"]' || echo "none")
-          
-          echo "Upstream Digest: $UPSTREAM_DIGEST"
-          echo "Current Base Digest: $CURRENT_BASE_DIGEST"
-          
-          # Export the upstream digest so the build job can label the new image
-          echo "upstream_digest=$UPSTREAM_DIGEST" >> $GITHUB_OUTPUT
-          
-          # Force a build if it's a manual trigger, a push to master, OR if the digests don't match
-          if [ "$UPSTREAM_DIGEST" != "$CURRENT_BASE_DIGEST" ] || [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "Update found or manual/push trigger detected. Building."
-          else
-            echo "should_build=false" >> $GITHUB_OUTPUT
-            echo "No updates to base image. Skipping build."
-          fi
+      code_server_tag: ${{ steps.check.outputs.code_server_tag }}
+      node_version: ${{ steps.check.outputs.node_version }}
+      npm_version: ${{ steps.check.outputs.npm_version }}
+      pnpm_version: ${{ steps.check.outputs.pnpm_version }}
+      docker_cli_version: ${{ steps.check.outputs.docker_cli_version }}
 
-  build:
-    needs: check-upstream
-    if: needs.check-upstream.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check versions
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          dockerfile = Path("Dockerfile").read_text()
+
+          def current_version(argument):
+              pattern = (
+                  rf"^[ \t]*ARG[ \t]+{argument}[ \t]*=[ \t]*"
+                  rf"[\"']?([^\"'\s]+)[\"']?[ \t]*(?:#.*)?$"
+              )
+              matches = re.findall(pattern, dockerfile, re.MULTILINE)
+
+              if len(matches) != 1:
+                  raise RuntimeError(
+                      f"Expected exactly one ARG {argument}"
+                  )
+
+              return matches[0]
+
+          # Query remote registry metadata for the latest base image digest via skopeo
+          upstream_digest = subprocess.check_output(
+              ["skopeo", "inspect", "docker://lscr.io/linuxserver/code-server:latest"],
+              text=True
+          )
+          upstream_digest = json.loads(upstream_digest)["Digest"]
+          
+          # Format with '@' prefix so it maps cleanly into the Dockerfile FROM line
+          formatted_digest = f"@{upstream_digest}"
+
+          current_digest = current_version("CODE_SERVER_TAG")
+          current_node = current_version("NODE_VERSION")
+          current_npm = current_version("NPM_VERSION")
+          current_pnpm = current_version("PNPM_VERSION")
+          current_docker_cli = current_version("DOCKER_CLI_VERSION")
+
+          newer = (formatted_digest != current_digest)
+
+          should_build = (
+              newer or os.environ["EVENT_NAME"] == "workflow_dispatch"
+          )
+
+          print(f"CODE_SERVER_TAG: current={current_digest}, upstream={formatted_digest}")
+          print(f"Build required: {should_build}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"should_build={str(should_build).lower()}\n")
+              output.write(f"code_server_tag={formatted_digest}\n")
+              output.write(f"node_version={current_node}\n")
+              output.write(f"npm_version={current_npm}\n")
+              output.write(f"pnpm_version={current_pnpm}\n")
+              output.write(f"docker_cli_version={current_docker_cli}\n")
+          PY
+
+  build-and-test:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+
+    env:
+      IMAGE: solodolobolo/code-server
+      TEST_IMAGE: code-server-ci:${{ matrix.arch }}
+      TEST_PLATFORM: linux/${{ matrix.arch }}
+      CODE_SERVER_TAG: ${{ needs.check-upstream.outputs.code_server_tag }}
+      NODE_VERSION: ${{ needs.check-upstream.outputs.node_version }}
+      NPM_VERSION: ${{ needs.check-upstream.outputs.npm_version }}
+      PNPM_VERSION: ${{ needs.check-upstream.outputs.pnpm_version }}
+      DOCKER_CLI_VERSION: ${{ needs.check-upstream.outputs.docker_cli_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -59,18 +133,322 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build image
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: solodolobolo/code-server:latest
+          platforms: ${{ env.TEST_PLATFORM }}
+          load: true
+          push: false
           pull: true
-          # Inject the base image digest we found in the previous step
+          provenance: false
+          tags: ${{ env.TEST_IMAGE }}
+          build-args: |
+            CODE_SERVER_TAG=${{ env.CODE_SERVER_TAG }}
+            NODE_VERSION=${{ env.NODE_VERSION }}
+            NPM_VERSION=${{ env.NPM_VERSION }}
+            PNPM_VERSION=${{ env.PNPM_VERSION }}
+            DOCKER_CLI_VERSION=${{ env.DOCKER_CLI_VERSION }}
           labels: |
             org.opencontainers.image.base.name=lscr.io/linuxserver/code-server:latest
-            org.opencontainers.image.base.digest=${{ needs.check-upstream.outputs.upstream_digest }}
-          # Use GitHub Actions cache to speed up the build when only the base image updates
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            org.opencontainers.image.base.digest=${{ env.CODE_SERVER_TAG }}
+          cache-from: type=gha,scope=code-server-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=code-server-${{ matrix.arch }}
+
+      - name: Check architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          actual="$(docker image inspect \
+            --format '{{.Architecture}}' "$TEST_IMAGE")"
+
+          echo "Expected: $EXPECTED_ARCH; actual: $actual"
+          test "$actual" = "$EXPECTED_ARCH"
+
+      - name: Test executables and runtimes
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            --platform "$TEST_PLATFORM" \
+            --entrypoint /bin/sh \
+            "$TEST_IMAGE" -ec '
+              echo "Checking Docker CLI"
+              command -v docker
+              docker --version
+
+              echo "Checking Node.js & npm"
+              command -v node
+              node --version
+              command -v npm
+              npm --version
+
+              echo "Checking pnpm"
+              command -v pnpm
+              pnpm --version
+
+              echo "Checking Python 3.14 & venv/dev headers"
+              command -v python3.14
+              python3.14 --version
+              python3.14 -m venv --help
+              dpkg -l | grep python3.14-dev
+
+              echo "PASS: all custom binaries and runtimes verified"
+            '
+
+          echo "Checking passwordless sudo for user abc"
+          docker run --rm \
+            --platform "$TEST_PLATFORM" \
+            --user abc \
+            --entrypoint sudo \
+            "$TEST_IMAGE" -n true
+
+          echo "PASS: passwordless sudo verified for user abc"
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f test_code_server >/dev/null 2>&1 || true
+
+      - name: Save tested image
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/tested-images
+
+          docker image inspect "$TEST_IMAGE" \
+            --format '{{.Id}}' \
+            > "/tmp/tested-images/${ARCH}.id"
+
+          docker save "$TEST_IMAGE" \
+            | gzip -1 > "/tmp/tested-images/${ARCH}.tar.gz"
+
+          test -s "/tmp/tested-images/${ARCH}.tar.gz"
+
+          echo "PASS: saved tested $ARCH image"
+          cat "/tmp/tested-images/${ARCH}.id"
+          ls -lh "/tmp/tested-images/${ARCH}.tar.gz"
+
+      - name: Upload tested image
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-image-${{ matrix.arch }}
+          path: |
+            /tmp/tested-images/${{ matrix.arch }}.tar.gz
+            /tmp/tested-images/${{ matrix.arch }}.id
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    needs: [check-upstream, build-and-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: write
+
+    env:
+      IMAGE: solodolobolo/code-server
+      CODE_SERVER_TAG: ${{ needs.check-upstream.outputs.code_server_tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Download tested images
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tested-image-*
+          merge-multiple: true
+          path: /tmp/tested-images
+
+      - name: Load and verify tested images
+        run: |
+          set -euo pipefail
+
+          for arch in amd64 arm64; do
+            echo "--- Loading tested $arch image ---"
+
+            gzip -dc "/tmp/tested-images/${arch}.tar.gz" \
+              | docker load
+
+            expected_id="$(cat "/tmp/tested-images/${arch}.id")"
+
+            actual_id="$(docker image inspect "code-server-ci:$arch" \
+              --format '{{.Id}}')"
+
+            actual_arch="$(docker image inspect "code-server-ci:$arch" \
+              --format '{{.Architecture}}')"
+
+            echo "Expected image ID: $expected_id"
+            echo "Actual image ID:   $actual_id"
+            echo "Expected architecture: $arch; actual: $actual_arch"
+
+            test "$actual_id" = "$expected_id"
+            test "$actual_arch" = "$arch"
+
+            echo "PASS: loaded the exact tested $arch image"
+          done
+
+      - name: Push tested architecture images
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/digests
+
+          for arch in amd64 arm64; do
+            echo "--- Pushing $IMAGE:$arch ---"
+
+            docker tag "code-server-ci:$arch" "$IMAGE:$arch"
+            docker push "$IMAGE:$arch"
+
+            digest="$(docker buildx imagetools inspect "$IMAGE:$arch" \
+              --format '{{.Manifest.Digest}}')"
+
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+            printf '%s@%s\n' "$IMAGE" "$digest" \
+              > "/tmp/digests/${arch}.txt"
+
+            echo "PASS: pushed tested $arch image: $IMAGE@$digest"
+          done
+
+      - name: Publish tags
+        run: |
+          set -euo pipefail
+
+          amd64="$(cat /tmp/digests/amd64.txt)"
+          arm64="$(cat /tmp/digests/arm64.txt)"
+
+          docker buildx imagetools create \
+            --tag "$IMAGE:amd64" \
+            "$amd64"
+
+          docker buildx imagetools create \
+            --tag "$IMAGE:arm64" \
+            "$arm64"
+
+          docker buildx imagetools create \
+            --tag "$IMAGE:latest" \
+            "$amd64" \
+            "$arm64"
+
+      - name: Check manifests
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          image = os.environ["IMAGE"]
+
+          expected = {
+              "amd64": {("linux", "amd64")},
+              "arm64": {("linux", "arm64")},
+              "latest": {
+                  ("linux", "amd64"),
+                  ("linux", "arm64"),
+              },
+          }
+
+          for tag, required in expected.items():
+              reference = f"{image}:{tag}"
+
+              result = subprocess.run(
+                  [
+                      "docker", "buildx", "imagetools", "inspect",
+                      "--raw", reference,
+                  ],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+
+              manifest = json.loads(result.stdout)
+
+              platforms = {
+                  (
+                      item.get("platform", {}).get("os"),
+                      item.get("platform", {}).get("architecture"),
+                  )
+                  for item in manifest.get("manifests", [])
+              }
+
+              if platforms != required:
+                  raise RuntimeError(
+                      f"{reference}: expected {required}, found {platforms}"
+                  )
+
+              print(f"PASS: {reference} -> {sorted(platforms)}")
+          PY
+
+      - name: Update Dockerfile
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("Dockerfile")
+          text = path.read_text()
+          version = os.environ["CODE_SERVER_TAG"]
+
+          pattern = re.compile(
+              r"^([ \t]*ARG[ \t]+CODE_SERVER_TAG[ \t]*=[ \t]*)"
+              r"([\"']?)([^\"'\s]+)\2"
+              r"([ \t]*(?:#.*)?)$",
+              re.MULTILINE,
+          )
+
+          def replace(match):
+              prefix, quote, old_version, suffix = match.groups()
+              print(f"CODE_SERVER_TAG: {old_version} -> {version}")
+              return f"{prefix}{quote}{version}{quote}{suffix}"
+
+          text, count = pattern.subn(replace, text)
+
+          if count != 1:
+              raise RuntimeError(
+                  "Expected one CODE_SERVER_TAG declaration; found "
+                  f"{count}"
+              )
+
+          path.write_text(text)
+          PY
+
+      - name: Commit version update
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "github-actions[bot]@users.noreply.github.com"
+
+          git add Dockerfile
+
+          if git diff --cached --quiet; then
+            echo "Dockerfile version unchanged; nothing to commit."
+            exit 0
+          fi
+
+          git diff --cached -- Dockerfile
+
+          git commit \
+            -m "chore: update Dockerfile to tested code-server base digest"
+
+          git push origin "HEAD:${GITHUB_REF_NAME}"

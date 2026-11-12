@@ -5,12 +5,12 @@ For more information, please refer to the official [linuxserver/code-server](htt
 
 ## Custom Features
 
-This build incorporates the following modifications to the standard environment:
+This build incorporates the following modifications to the standard environment, with all custom runtimes and binaries fully tested and verified prior to publishing:
 
-* **Docker CLI:** Installed for container orchestration natively from the terminal (requires socket mount).
-* **Node.js Environment:** Integrated Node.js (v24.x) with `npm@latest` and `pnpm` pre-installed.
-* **Python Environment:** Includes Python 3.14 along with `venv` and development headers.
-* **Passwordless Sudo:** The default `abc` user is explicitly granted `NOPASSWD` rights for maximum development flexibility.
+- **Docker CLI:** Installed natively for terminal container orchestration (requires socket mount).
+- **Node.js Environment:** Integrated Node.js environment paired with `npm` and `pnpm`.
+- **Python Environment:** Includes Python along with `venv` and development headers.
+- **Passwordless Sudo:** The default `abc` user is explicitly granted `NOPASSWD` rights for maximum development flexibility.
 
 ## Supported Architectures
 
@@ -42,6 +42,27 @@ git config --global user.email "email address"
 
 ```
 
+## Build Arguments
+
+If you are building the image from source, you can override the default pinned versions past the last known stable configuration by passing build arguments (`--build-arg`):
+
+* `CODE_SERVER_TAG` (Base image tag or digest)
+* `NODE_VERSION` (Node.js major version)
+* `NPM_VERSION` (Exact npm version)
+* `PNPM_VERSION` (Exact pnpm version)
+* `PYTHON_VERSION` (Python version)
+* `DOCKER_CLI_VERSION` (Exact apt package version string for `docker-ce-cli`)
+
+Example:
+
+```bash
+docker build \
+  --build-arg NODE_VERSION=22 \
+  --build-arg NPM_VERSION=10.9.0 \
+  -t solodolobolo/code-server .
+
+```
+
 ## Usage
 
 ### docker-compose
@@ -60,8 +81,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-Etc/UTC}
+      - PGID=${PGID:-1000} - TZ=${TZ:-Etc/UTC}
       - PASSWORD=${PASSWORD:-password}
       - HASHED_PASSWORD=${HASHED_PASSWORD:-}
       - PROXY_DOMAIN=${PROXY_DOMAIN:-}
